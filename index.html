@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Roblox 純 HTML 上傳器</title>
+    <title>Roblox 純 HTML 上傳器 (iPad 修正版)</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -65,8 +65,8 @@
     <label>🆔 我的 User ID (純數字):</label>
     <input type="text" id="userId" placeholder="例如: 12345678">
     
-    <label>📦 選擇 3D 檔案 (.fbx / .glb):</label>
-    <input type="file" id="fileInput" accept=".fbx,.glb">
+    <label>📦 選擇 3D 檔案 (FBX / GLB):</label>
+    <input type="file" id="fileInput">
     
     <button onclick="startUpload()">🚀 開始上傳</button>
     
@@ -90,10 +90,10 @@ async function startUpload() {
     statusBox.style.color = '#383d41';
     statusBox.innerText = '⏳ 正在直接發送請求給 Roblox...';
 
-    // 依據副檔名自動判斷檔案格式
+    // 後台邏輯依然會根據你選的檔案副檔名，自動給予正確的標籤
     let contentType = 'application/octet-stream';
-    if (file.name.endsWith('.fbx')) contentType = 'model/fbx';
-    if (file.name.endsWith('.glb')) contentType = 'model/gltf-binary';
+    if (file.name.toLowerCase().endsWith('.fbx')) contentType = 'model/fbx';
+    if (file.name.toLowerCase().endsWith('.glb')) contentType = 'model/gltf-binary';
 
     const metadata = {
         assetType: "Model",
@@ -103,7 +103,6 @@ async function startUpload() {
     };
 
     const formData = new FormData();
-    // 將元數據打包成 Blob 放入表單
     formData.append('request', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
     formData.append('fileContent', file, file.name);
 
@@ -112,7 +111,6 @@ async function startUpload() {
             method: 'POST',
             headers: {
                 'x-api-key': apiKey
-                // 注意：不要手動設定 Content-Type，瀏覽器會自動生成帶有 boundary 的 multipart/form-data
             },
             body: formData
         });
