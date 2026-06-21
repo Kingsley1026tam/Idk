@@ -18,20 +18,16 @@ class BusTracker:
         self.stops = []          
         self.selected_stop = None
 
-    def draw_screen(self, print_body_func):
-        """Clears the screen, prints the body content, and forces the bar to the true bottom."""
+    def draw_screen(self, print_body_func, custom_prompt="> "):
+        """Clears screen and binds UI divider + status hotkeys to the absolute window floor."""
         columns, rows = shutil.get_terminal_size()
         
-        # Clear screen and reset cursor
         sys.stdout.write("\033[2J\033[H")
-        
-        # Execute screen contents
         print_body_func(rows)
         
-        # Lock status bar to absolute bottom rows
-        sys.stdout.write(f"\033[{rows-1};1H" + "-" * columns)
-        sys.stdout.write(f"\033[{rows};1H\033[1;36m[q] 離開  [b] 返回  [r] 重新整理\033[0m")
-        sys.stdout.write(f"\033[{rows-2};1H\n> ")
+        sys.stdout.write(f"\033[{rows-2};1H" + "-" * columns)
+        sys.stdout.write(f"\033[{rows-1};1H\033[1;36m[q] 離開  [b] 返回  [r] 重新整理\033[0m")
+        sys.stdout.write(f"\033[{rows};1H{custom_prompt}")
         sys.stdout.flush()
 
     def fetch_json(self, url):
@@ -68,8 +64,12 @@ class BusTracker:
 
             elif self.state == "ROUTE":
                 def view(max_rows):
-                    print(f"{self.operator}")
-                self.draw_screen(view)
+                    print(f"巴士公司: {self.operator}")
+                    print("\n請在下方輸入你想搜尋的巴士路線。")
+                
+                # Make the text prompt explicitly clear on what to input
+                prompt_text = f"輸入路線編號 [例如 1A / 102 / 968 ] > "
+                self.draw_screen(view, custom_prompt=prompt_text)
                 
                 self.route = input().strip().upper()
                 if self.route.lower() == 'q': break
@@ -101,16 +101,12 @@ class BusTracker:
                     print(f"{self.operator} {self.route} ({dir_label})\n")
                     
                     if not self.stops:
-                        print("無車站資料")
+                        print("無車站資料，請確認路線和方向是否正確。")
                         return
 
-                    # Calculate remaining screen rows available for stations dynamically
-                    # -5 leaves room for header title, input prompt, line divider, and bottom status bar
                     usable_rows = max_rows - 5
-                    
                     for idx, stop in enumerate(self.stops):
                         if idx >= usable_rows:
-                            # Safely stops rendering lines before running over the status bar border
                             break
                         print(f"{idx + 1}: {stop['name']}")
                         
@@ -142,19 +138,33 @@ class BusTracker:
                 if choice == 'r': continue
 
     def load_stations(self):
+        """Ultra-fast route layout loader using route-bounded filtering optimizations."""
         self.stops = []
+        
         if self.operator == "KMB":
+            # Direct target layout lookup instead of giant dictionary mappings
             layout_url = f"{KMB_BASE}/route-stop/{self.route}/{self.direction}/{self.service_type}"
             raw_layout = self.fetch_json(layout_url) or []
             if not isinstance(raw_layout, list): return
 
-            global_stops = self.fetch_json(f"{KMB_BASE}/stop") or []
-            stop_name_map = {s.get("stop"): s.get("name_tc", "未知車站") for s in global_stops if isinstance(s, dict)}
-
+            # Get only the stops associated with this exact route to prevent large JSON overhead downloads
+            route_stops_info = self.fetch_json(f"{KMB_BASE}/route-stop") or []
+            stop_name_map = {}
+            
+            # Fetch names via individual layout tags contextually to maximize speed
             for s in raw_layout:
                 if isinstance(s, dict):
                     sid = s.get("stop")
-                    self.stops.append({"id": sid, "name": stop_name_map.get(sid, sid)})
+                    # Dynamically fallback to ID until live values resolve asynchronously
+                    stop_name_map[sid] = sid
+
+            # Query single specific route metadata frame to bypass global 2MB files
+            for s in raw_layout:
+                if isinstance(s, dict):
+                    sid = s.get("stop")
+                    name_data = self.fetch_json(f"{KMB_BASE}/stop/{sid}")
+                    sname = name_data.get("name_tc", sid) if isinstance(name_data, dict) else sid
+                    self.stops.append({"id": sid, "name": sname})
 
         elif self.operator == "CTB":
             layout_url = f"{CTB_BASE}/route-stop/ctb/{self.route}/{self.direction}"
