@@ -1,6 +1,7 @@
 import sys
 import datetime
 import requests
+import curses
 
 TIMEOUT = 5
 KMB_BASE = "https://data.etabus.gov.hk/v1/transport/kmb"
@@ -9,25 +10,13 @@ NLB_BASE = "https://rt.data.gov.hk/v2/transport/nlb"
 
 class BusTracker:
     def __init__(self):
-        self.state = "OPERATOR"  
         self.operator = None     
         self.route = None
         self.direction = None    
         self.service_type = "1"  
         self.stops = []          
         self.selected_stop = None
-
-    def draw_screen(self, print_body_func, custom_prompt="> "):
-        """Clears current view and purges terminal scrollback history buffer completely."""
-        # \033[2J clear screen, \033[3J clears scrollback history, \033[H resets cursor
-        sys.stdout.write("\033[2J\033[3J\033[H")
-        
-        print_body_func()
-        
-        print("-" * 30)
-        print("\033[1;36m[q] 離開  [b] 返回  [r] 重新整理\033[0m")
-        sys.stdout.write(f"\n{custom_prompt}")
-        sys.stdout.flush()
+        self.scroll_index = 0
 
     def fetch_json(self, url):
         try:
@@ -48,88 +37,119 @@ class BusTracker:
         except Exception:
             return "未知"
 
-    def run(self):
+    def get_input_string(self, stdscr, prompt_text, y, x):
+        """A safe input utility rendering natively within active viewport lines."""
+        curses.echo()
+        stdscr.addstr(y, x, prompt_text)
+        stdscr.refresh()
+        input_bytes = stdscr.getstr(y, x + len(prompt_text))
+        curses.noecho()
+        return input_bytes.decode('utf-8').strip()
+
+    def draw_layout_bar(self, stdscr, max_y, max_x):
+        """Forces the horizontal bar and text options directly onto terminal boundary rows."""
+        try:
+            stdscr.addstr(max_y - 3, 0, "-" * (max_x - 1))
+            stdscr.addstr(max_y - 2, 0, "[q] 離開  [b] 返回  [r] 重新整理", curses.A_BOLD)
+        except curses.error:
+            pass
+
+    def main_loop(self, stdscr):
+        curses.curs_set(1)  # Enable visible tracking line cursors
+        state = "OPERATOR"
+        
         while True:
-            if self.state == "OPERATOR":
-                def view():
-                    print("1: KMB\n2: CTB\n3: NLB")
-                self.draw_screen(view)
-                
-                choice = input().strip().lower()
-                if choice == 'q': break
-                elif choice == '1': self.operator, self.state = "KMB", "ROUTE"
-                elif choice == '2': self.operator, self.state = "CTB", "ROUTE"
-                elif choice == '3': self.operator, self.state = "NLB", "ROUTE"
+            stdscr.clear()
+            max_y, max_x = stdscr.getmaxyx()
+            self.draw_layout_bar(stdscr, max_y, max_x)
 
-            elif self.state == "ROUTE":
-                def view():
-                    print(f"巴士公司: {self.operator}")
+            if state == "OPERATOR":
+                stdscr.addstr(0, 0, "1: KMB\n2: CTB\n3: NLB")
+                choice = self.get_input_string(stdscr, "> ", 4, 0).lower()
                 
-                prompt_text = f"輸入路線編號 [例如 1A / 102 / 968 ] > "
-                self.draw_screen(view, custom_prompt=prompt_text)
-                
-                self.route = input().strip().upper()
-                if self.route.lower() == 'q': break
-                if self.route.lower() == 'b': self.state = "OPERATOR"; continue
-                self.state = "DIRECTION"
-
-            elif self.state == "DIRECTION":
-                def view():
-                    print(f"{self.operator} {self.route}\n")
-                    print("1: 去程\n2: 回程")
-                self.draw_screen(view)
-                
-                choice = input().strip().lower()
                 if choice == 'q': break
-                if choice == 'b': self.state = "ROUTE"; continue
+                elif choice == '1': self.operator, state = "KMB", "ROUTE"
+                elif choice == '2': self.operator, state = "CTB", "ROUTE"
+                elif choice == '3': self.operator, state = "NLB", "ROUTE"
+
+            elif state == "ROUTE":
+                stdscr.addstr(0, 0, f"巴士公司: {self.operator}")
+                prompt = "輸入路線編號 [例如 1A / 102 ] > "
+                choice = self.get_input_string(stdscr, prompt, 2, 0)
                 
+                if choice.lower() == 'q': break
+                if choice.lower() == 'b': state = "OPERATOR"; continue
+                if choice:
+                    self.route = choice.upper()
+                    state = "DIRECTION"
+
+            elif state == "DIRECTION":
+                stdscr.addstr(0, 0, f"{self.operator} {self.route}\n\n1: 去程\n2: 回程")
+                choice = self.get_input_string(stdscr, "> ", 5, 0).lower()
+                
+                if choice == 'q': break
+                if choice == 'b': state = "ROUTE"; continue
                 if choice in ['1', '2']:
                     if self.operator in ["KMB", "CTB"]:
                         self.direction = "outbound" if choice == '1' else "inbound"
                     elif self.operator == "NLB":
                         self.direction = "O" if choice == '1' else "I"
                     
+                    stdscr.addstr(7, 0, "載入中...")
+                    stdscr.refresh()
                     self.load_stations()
-                    self.state = "STATIONS"
+                    self.scroll_index = 0
+                    state = "STATIONS"
 
-            elif self.state == "STATIONS":
-                def view():
-                    dir_label = "去程" if self.direction in ["outbound", "O"] else "回程"
-                    print(f"{self.operator} {self.route} ({dir_label})\n")
-                    
-                    if not self.stops:
-                        print("無車站資料，請確認路線和方向是否正確。")
-                        return
-
-                    for idx, stop in enumerate(self.stops):
-                        print(f"{idx + 1}: {stop['name']}")
-                        
-                self.draw_screen(view, custom_prompt="輸入車站號碼 > ")
-
+            elif state == "STATIONS":
+                dir_label = "去程" if self.direction in ["outbound", "O"] else "回程"
+                stdscr.addstr(0, 0, f"{self.operator} {self.route} ({dir_label})")
+                
                 if not self.stops:
-                    input()
-                    self.state = "DIRECTION"
+                    stdscr.addstr(2, 0, "無車站資料，請確認路線是否正確。")
+                    choice = self.get_input_string(stdscr, "> ", 4, 0).lower()
+                    if choice == 'b': state = "DIRECTION"
+                    elif choice == 'q': break
                     continue
-                
-                choice = input().strip().lower()
-                if choice == 'q': break
-                if choice == 'b': self.state = "DIRECTION"; self.stops = []; continue
-                if choice == 'r': self.load_stations(); continue
 
-                if choice.isdigit() and 1 <= int(choice) <= len(self.stops):
+                # Scroll bounding block equations mapping logic lines
+                usable_height = max_y - 6  # Reserve lines safely for menu overlays
+                visible_stops = self.stops[self.scroll_index : self.scroll_index + usable_height]
+                
+                for i, stop in enumerate(visible_stops):
+                    line_num = self.scroll_index + i + 1
+                    stdscr.addstr(2 + i, 0, f"{line_num}: {stop['name']}")
+
+                # Render positional page counts above line border paths
+                if len(self.stops) > usable_height:
+                    stdscr.addstr(max_y - 4, 0, f"[提示] 可輸入 w 上捲 / s 下捲 瀏覽更多車站")
+
+                choice = self.get_input_string(stdscr, "輸入車站號碼 > ", max_y - 1, 0).lower()
+                
+                if choice == 'q': break
+                elif choice == 'b': state = "DIRECTION"; self.stops = []; continue
+                elif choice == 'r': self.load_stations(); continue
+                elif choice == 'w': # Scroll screen view up
+                    self.scroll_index = max(0, self.scroll_index - usable_height)
+                elif choice == 's': # Scroll screen view down
+                    if self.scroll_index + usable_height < len(self.stops):
+                        self.scroll_index += usable_height
+                elif choice.isdigit() and 1 <= int(choice) <= len(self.stops):
                     self.selected_stop = self.stops[int(choice) - 1]
-                    self.state = "ETA"
+                    state = "ETA"
 
-            elif self.state == "ETA":
-                def view():
-                    print(f"{self.operator} {self.route} -> {self.selected_stop['name']}\n")
-                    self.show_live_eta()
-                self.draw_screen(view)
+            elif state == "ETA":
+                stdscr.addstr(0, 0, f"{self.operator} {self.route} -> {self.selected_stop['name']}\n")
                 
-                choice = input().strip().lower()
+                # Fetch live data strings directly into buffer array tracking matrices
+                lines = self.get_eta_lines()
+                for idx, line in enumerate(lines):
+                    stdscr.addstr(2 + idx, 0, line)
+                
+                choice = self.get_input_string(stdscr, "> ", max_y - 1, 0).lower()
                 if choice == 'q': break
-                if choice == 'b': self.state = "STATIONS"; continue
-                if choice == 'r': continue
+                elif choice == 'b': state = "STATIONS"; continue
+                elif choice == 'r': continue
 
     def load_stations(self):
         self.stops = []
@@ -165,19 +185,20 @@ class BusTracker:
                     if isinstance(s, dict):
                         self.stops.append({"id": s.get("stopId"), "name": s.get("stopName_c")})
 
-    def show_live_eta(self):
+    def get_eta_lines(self):
+        output = []
         sid = self.selected_stop["id"]
         if self.operator == "KMB":
             records = self.fetch_json(f"{KMB_BASE}/stop-eta/{sid}") or []
             matched = [r for r in records if isinstance(r, dict) and r.get("route") == self.route and str(r.get("dir")).lower() == self.direction[0]]
             for idx, r in enumerate(matched[:3]):
-                print(f"巴士 {idx+1}: {self.calculate_mins(r.get('eta'))} ({r.get('rmk_tc', '即時班次')})")
+                output.append(f"巴士 {idx+1}: {self.calculate_mins(r.get('eta'))} ({r.get('rmk_tc', '即時班次')})")
 
         elif self.operator == "CTB":
             records = self.fetch_json(f"{CTB_BASE}/eta/ctb/{sid}/{self.route}") or []
             matched = [r for r in records if isinstance(r, dict) and str(r.get("dir")).upper() == self.direction.upper()]
             for idx, r in enumerate(matched[:3]):
-                print(f"巴士 {idx+1}: {self.calculate_mins(r.get('eta'))} ({r.get('rmk_tc', '即時班次')})")
+                output.append(f"巴士 {idx+1}: {self.calculate_mins(r.get('eta'))} ({r.get('rmk_tc', '即時班次')})")
 
         elif self.operator == "NLB":
             routes = self.fetch_json(f"{NLB_BASE}/route").get("routes", []) if self.fetch_json(f"{NLB_BASE}/route") else []
@@ -186,12 +207,12 @@ class BusTracker:
                 records = self.fetch_json(f"{NLB_BASE}/eta?routeId={rid}&stopId={sid}").get("estimatedArrivals", [])
                 for idx, r in enumerate(records[:3]):
                     if isinstance(r, dict):
-                        print(f"巴士 {idx+1}: {r.get('estimatedArrivalTime')}")
+                        output.append(f"巴士 {idx+1}: {r.get('estimatedArrivalTime')}")
+        if not output:
+            output.append("暫無即時班次資料")
+        return output
 
 if __name__ == "__main__":
-    try:
-        tracker = BusTracker()
-        tracker.run()
-        sys.stdout.write("\033[2J\033[3J\033[H")
-    except KeyboardInterrupt:
-        sys.stdout.write("\033[2J\033[3J\033[H")
+    # curses.wrapper dynamically creates and cleans the alternative viewport layout completely on exit
+    tracker = BusTracker()
+    curses.wrapper(tracker.main_loop)
