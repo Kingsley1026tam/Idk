@@ -50,11 +50,16 @@ class BusTracker:
         """Forces the horizontal bar and text options directly onto terminal boundary rows."""
         try:
             stdscr.addstr(max_y - 3, 0, "-" * (max_x - 1))
-            stdscr.addstr(max_y - 2, 0, "[q] 離開  [b] 返回  [r] 重新整理", curses.A_BOLD)
+            # Use color pair 1 (Cyan text, transparent device background)
+            stdscr.addstr(max_y - 2, 0, "[q] 離開  [b] 返回  [r] 重新整理", curses.color_pair(1) | curses.A_BOLD)
         except curses.error:
             pass
 
     def main_loop(self, stdscr):
+        # Force curses to respect the device's native terminal background
+        curses.use_default_colors()
+        curses.init_pair(1, curses.COLOR_CYAN, -1)
+        
         curses.curs_set(1)  # Enable visible tracking line cursors
         state = "OPERATOR"
         
@@ -74,7 +79,7 @@ class BusTracker:
 
             elif state == "ROUTE":
                 stdscr.addstr(0, 0, f"巴士公司: {self.operator}")
-                prompt = "輸入路線編號 [例如 1A / 102 ] > "
+                prompt = "輸入路線編號 > "
                 choice = self.get_input_string(stdscr, prompt, 2, 0)
                 
                 if choice.lower() == 'q': break
@@ -112,15 +117,13 @@ class BusTracker:
                     elif choice == 'q': break
                     continue
 
-                # Scroll bounding block equations mapping logic lines
-                usable_height = max_y - 6  # Reserve lines safely for menu overlays
+                usable_height = max_y - 6  
                 visible_stops = self.stops[self.scroll_index : self.scroll_index + usable_height]
                 
                 for i, stop in enumerate(visible_stops):
                     line_num = self.scroll_index + i + 1
                     stdscr.addstr(2 + i, 0, f"{line_num}: {stop['name']}")
 
-                # Render positional page counts above line border paths
                 if len(self.stops) > usable_height:
                     stdscr.addstr(max_y - 4, 0, f"[提示] 可輸入 w 上捲 / s 下捲 瀏覽更多車站")
 
@@ -129,9 +132,9 @@ class BusTracker:
                 if choice == 'q': break
                 elif choice == 'b': state = "DIRECTION"; self.stops = []; continue
                 elif choice == 'r': self.load_stations(); continue
-                elif choice == 'w': # Scroll screen view up
+                elif choice == 'w': 
                     self.scroll_index = max(0, self.scroll_index - usable_height)
-                elif choice == 's': # Scroll screen view down
+                elif choice == 's': 
                     if self.scroll_index + usable_height < len(self.stops):
                         self.scroll_index += usable_height
                 elif choice.isdigit() and 1 <= int(choice) <= len(self.stops):
@@ -141,7 +144,6 @@ class BusTracker:
             elif state == "ETA":
                 stdscr.addstr(0, 0, f"{self.operator} {self.route} -> {self.selected_stop['name']}\n")
                 
-                # Fetch live data strings directly into buffer array tracking matrices
                 lines = self.get_eta_lines()
                 for idx, line in enumerate(lines):
                     stdscr.addstr(2 + idx, 0, line)
@@ -213,6 +215,5 @@ class BusTracker:
         return output
 
 if __name__ == "__main__":
-    # curses.wrapper dynamically creates and cleans the alternative viewport layout completely on exit
     tracker = BusTracker()
     curses.wrapper(tracker.main_loop)
