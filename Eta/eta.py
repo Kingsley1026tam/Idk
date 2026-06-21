@@ -18,14 +18,12 @@ class BusTracker:
         self.selected_stop = None
 
     def draw_screen(self, print_body_func, custom_prompt="> "):
-        """Clears screen sequentially to allow standard terminal scrolling history."""
-        # ANSI sequence to clear the screen from the viewport cleanly
-        sys.stdout.write("\033[2J\033[H")
+        """Clears current view and purges terminal scrollback history buffer completely."""
+        # \033[2J clear screen, \033[3J clears scrollback history, \033[H resets cursor
+        sys.stdout.write("\033[2J\033[3J\033[H")
         
-        # Print main body content
         print_body_func()
         
-        # Print a bottom layout status line
         print("-" * 30)
         print("\033[1;36m[q] 離開  [b] 返回  [r] 重新整理\033[0m")
         sys.stdout.write(f"\n{custom_prompt}")
@@ -194,6 +192,6 @@ if __name__ == "__main__":
     try:
         tracker = BusTracker()
         tracker.run()
-        sys.stdout.write("\033[2J\033[H")
+        sys.stdout.write("\033[2J\033[3J\033[H")
     except KeyboardInterrupt:
-        sys.stdout.write("\033[2J\033[H")
+        sys.stdout.write("\033[2J\033[3J\033[H")
